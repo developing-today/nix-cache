@@ -46,6 +46,16 @@ Takeaway: nixos.org is ~1.75× faster on pulls — expected, it's a global CDN
 vs our single Worker. For a personal/team cache the absolute numbers are
 fine: seconds, not minutes.
 
+### Why no Attic speed numbers yet
+
+Attic server (atticd 0.1.0) is **built from source and running locally**
+(port 8080, config in `bench/atticd.toml`, token minted). The official
+client needs nix C++ dev libraries (`nix-main >= 2.24` via pkg-config);
+building it without the `nix_store` C++ feature is in progress. Numbers
+will be added when the client builds. Localhost vs remote is
+apples-to-oranges for throughput anyway — the meaningful comparison is
+protocol/operational overhead, not bandwidth.
+
 ### Why no Cachix speed numbers
 
 Pushing to Cachix requires your Cachix auth token, which I don't have.

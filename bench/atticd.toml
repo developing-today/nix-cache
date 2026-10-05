@@ -4,14 +4,16 @@
 listen = "127.0.0.1:8080"
 
 # JWT secret for client auth (benchmark only - not a production secret)
-jwt = { secret = "benchmark-jwt-secret-not-for-production" }
+# base64 of "benchmark-jwt-secret-not-for-production"
+[jwt.signing]
+token-hs256-secret-base64 = "YmVuY2htYXJrLWp3dC1zZWNyZXQtbm90LWZvci1wcm9kdWN0aW9u"
 
 [storage]
 type = "local"
 path = "/home/hatch/attic-storage"
 
-# Chunking: content-defined chunking dedupes across NARs
-[storage.chunking]
+# Data chunking (top-level in atticd config)
+[chunking]
 nar-size-threshold = 65536
 min-size = 16384
 avg-size = 65536
