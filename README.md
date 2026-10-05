@@ -57,18 +57,25 @@ wrangler deploy
 
 ```
 experimental-features = nix-command flakes ca-derivations
-substituters = https://nix-cache.<account>.workers.dev
-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWmi5qJeh0s9ZjeDkcQ5mmy43nxxA= nix-cache-1:<pubkey>
+substituters = https://nix-cache.developing-today-llc-domains-0.workers.dev
+trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWmi5qJeh0s9ZjeDkcQ5mmy43nxxA= nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8=
 ```
 
 Generate the cache keypair with `nix key generate-secret --key-name nix-cache-1`
 (+ `nix key convert-secret-to-public`), sign paths before upload with
 `nix store sign --key-file <secret> <path>`, then
-`nix copy --to 'https://nix-cache.<account>.workers.dev/upload/<secret>' <path>`.
+`nix copy --to 'https://nix-cache.developing-today-llc-domains-0.workers.dev/upload/<secret>' <path>`.
 
 ## Demo
 
 See `demo/flake.nix`: a content-addressed derivation with a 10s sleep, so a
-cache hit (instant) is distinguishable from a rebuild. Build, sign, push,
-delete the local path, then rebuild with only this cache as substituter —
-it should return immediately without rebuilding.
+cache hit (instant) is distinguishable from a rebuild. Verified end-to-end
+2026-10-05:
+
+1. `nix build .#demo` → built `/nix/store/0l22482...-nix-cache-ca-demo` (93s)
+2. `nix store sign` + `nix copy --to 'https://…/upload/<secret>'` → narinfo +
+   NAR in R2, metadata in KV + D1 (via queue)
+3. `nix store delete` the output + drv locally
+4. `nix build` with **only** this cache as substituter and only its key
+   trusted → `copying path … from 'https://nix-cache.developing-today-llc-domains-0.workers.dev'`
+   in **1.8s** — substituted, not rebuilt.
