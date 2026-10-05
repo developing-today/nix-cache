@@ -1,0 +1,26 @@
+# Attic server config for the nix-cache benchmark.
+# Docs: https://github.com/zhaofengli/attic
+
+listen = "127.0.0.1:8080"
+
+# JWT secret for client auth (benchmark only - not a production secret)
+jwt = { secret = "benchmark-jwt-secret-not-for-production" }
+
+[storage]
+type = "local"
+path = "/home/hatch/attic-storage"
+
+# Chunking: content-defined chunking dedupes across NARs
+[storage.chunking]
+nar-size-threshold = 65536
+min-size = 16384
+avg-size = 65536
+max-size = 262144
+
+[database]
+url = "sqlite:///home/hatch/attic-server.db?mode=rwc"
+
+# Garbage collection: keep everything for the benchmark
+[garbage-collection]
+interval = "24 hours"
+default-retention-period = "87600 hours"
