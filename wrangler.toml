@@ -1,0 +1,28 @@
+name = "nix-cache"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[[r2_buckets]]
+binding = "NARS"
+bucket_name = "nix-cache-nars"
+
+[[kv_namespaces]]
+binding = "INDEX"
+id = "c30a4b3978a449a1928f381511fc324c"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nix-cache-db"
+database_id = "5de66bbe-1dd8-4f19-95ac-3e95807fe513"
+
+[[queues.producers]]
+binding = "INDEX_QUEUE"
+queue = "nix-cache-indexing"
+
+[[queues.consumers]]
+queue = "nix-cache-indexing"
+max_batch_size = 20
+max_retries = 5
+
+[triggers]
+crons = ["17 3 * * *"]

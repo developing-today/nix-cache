@@ -1,0 +1,1 @@
+{"description":"Nix binary cache on Cloudflare: Workers + R2 + KV + D1 + Queues + Cron","devDependencies":{"@cloudflare/workers-types":"^4.0.0","typescript":"^5.6.0"},"name":"nix-cache","private":true,"scripts":{"deploy":"wrangler deploy","dev":"wrangler dev","schema":"wrangler d1 execute nix-cache-db --remote --file schema.sql","typecheck":"tsc --noEmit"},"version":"0.1.0"}
