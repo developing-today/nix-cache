@@ -46,6 +46,32 @@ Takeaway: nixos.org is ~1.75× faster on pulls — expected, it's a global CDN
 vs our single Worker. For a personal/team cache the absolute numbers are
 fine: seconds, not minutes.
 
+### Custom artifact: ours vs Cachix (20 MB, not on nixos.org)
+
+A 20 MiB deterministic random-data derivation (`bench/custom#custom-20m-v2`),
+pushed and pulled from both caches. This is the apples-to-apples comparison:
+Cachix can't be benchmarked on standard packages (it skips anything already
+on cache.nixos.org).
+
+| | Push (20 MB) | Pull (20 MB) |
+|---|---|---|
+| **ours** (xz) | **29 s** (0.69 MB/s) | **4 s** (5.0 MB/s) |
+| **Cachix** (zstd) | **8 s** (2.5 MB/s) | **9 s** (2.2 MB/s) |
+
+**Push:** Cachix is 3.6× faster. This is the compression algorithm, not the
+network: Cachix uses zstd, we use xz. On this machine (2 throttled vCPUs) xz
+compresses at 0.86 MB/s; zstd is ~3× faster at comparable ratios. If push
+speed matters, the Worker could accept zstd NARs — nix supports it, it's a
+one-line config change on the client (`compress = "zstd"` isn't a thing;
+actually `nix copy` uses the `compress` setting, default xz).
+
+**Pull:** Ours is 2.25× faster (4 s vs 9 s). Both ride Cloudflare's edge;
+the difference is likely Cachix's S3 origin latency vs our R2 (same
+datacenter as the Worker). Single measurement each — rerun for confidence.
+
+Net: for custom artifacts, we're slower on push (CPU-bound xz), faster on
+pull. The push gap is fixable by switching to zstd.
+
 ### Why no Attic speed numbers
 
 Attic server (atticd 0.1.0) is **built from source and running locally**
