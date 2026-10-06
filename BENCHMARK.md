@@ -60,10 +60,19 @@ on cache.nixos.org).
 
 **Push:** Cachix is 3.6× faster. This is the compression algorithm, not the
 network: Cachix uses zstd, we use xz. On this machine (2 throttled vCPUs) xz
-compresses at 0.86 MB/s; zstd is ~3× faster at comparable ratios. If push
-speed matters, the Worker could accept zstd NARs — nix supports it, it's a
-one-line config change on the client (`compress = "zstd"` isn't a thing;
-actually `nix copy` uses the `compress` setting, default xz).
+compresses at 0.86 MB/s; zstd is ~3× faster at comparable ratios.
+
+**Update 2026-10-06:** Closed the gap. `nix copy` hardcodes xz with no zstd
+option, so we ship `nix-cache-push-zstd.sh` — same protocol as `nix copy --to`
+(`nix-store --dump` → zstd -3 → PUT nar + narinfo), matching Cachix's approach.
+Result on the same 20 MB artifact: **push 8 s** (was 29 s), **pull 6 s** (was
+4 s with xz). Push now ties Cachix (8 s vs 8 s); pull still beats it (6 s vs 9 s).
+
+| | Push (20 MB) | Pull (20 MB) |
+|---|---|---|
+| **ours** (xz, `nix copy`) | 29 s | 4 s |
+| **ours** (zstd, script) | **8 s** | 6 s |
+| **Cachix** (zstd) | 8 s | 9 s |
 
 **Pull:** Ours is 2.25× faster (4 s vs 9 s). Both ride Cloudflare's edge;
 the difference is likely Cachix's S3 origin latency vs our R2 (same
