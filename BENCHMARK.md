@@ -60,11 +60,24 @@ throughput anyway — the meaningful comparison is protocol/operational
 overhead, not bandwidth. Server setup is documented in `bench/` for
 anyone with a working client.
 
-### Why no Cachix speed numbers
+### Cachix speed numbers (2026-10-06, Drew provided token + cache `dezren39`)
 
-Pushing to Cachix requires your Cachix auth token, which I don't have.
-If you add it to Secure Credentials I'll run the identical benchmark
-against `yourcache.cachix.org` and add the column. Pricing is below.
+Push and pull both verified working end-to-end with a custom CA derivation
+(`nix-cache-ca-demo`, 480 B NAR):
+- Push: `cachix push dezren39` succeeded, using **zstd** compression
+  (Cachix's preferred method; ours uses xz).
+- Pull: `nix build` with `https://dezren39.cachix.org` as substituter and
+  key `dezren39.cachix.org-1:+zOzRXxPWsdEwM7mumpLXH+6ju/Jq0JpdVYT/Wh/wfg=`
+  substituted the path in 2s.
+- **Important:** `cachix push` silently skips any path already on
+  cache.nixos.org (by design, to avoid wasting storage). All 16 standard
+  nixpkgs packages in our benchmark set were skipped for this reason —
+  so there is no apples-to-apples push-speed comparison on standard
+  packages. For custom artifacts (the actual use case for a personal
+  cache), both services push and pull correctly.
+- No meaningful throughput delta measured on the tiny demo artifact;
+  the architectural difference is operational (managed SaaS vs
+  self-hosted Worker), not protocol speed.
 
 ## Cost model
 
