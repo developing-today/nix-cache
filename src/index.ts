@@ -8,6 +8,9 @@
 //   GET  /nar/<file>                NAR bytes (R2)
 //   PUT  /upload/<secret>/<hash>.narinfo
 //   PUT  /upload/<secret>/nar/<file>
+//   POST /presign/<secret>/nar/<file>  presigned R2 PUT URL (bypasses 100MB Worker limit)
+
+import { AwsClient } from "aws4fetch";
 
 export interface Env {
   NARS: R2Bucket;
@@ -15,6 +18,9 @@ export interface Env {
   DB: D1Database;
   INDEX_QUEUE: Queue<IndexMessage>;
   UPLOAD_SECRET: string;
+  R2_ACCOUNT_ID: string;
+  R2_ACCESS_KEY_ID: string;
+  R2_SECRET_ACCESS_KEY: string;
 }
 
 interface IndexMessage {
@@ -158,6 +164,36 @@ export default {
       }
       if (!key || key.includes("..")) return new Response("bad key\n", { status: 400 });
       return handlePut(req, env, key);
+    }
+
+    // Presigned R2 PUT URLs: bypass the 100MB Worker request-body limit.
+    // Client: POST /presign/<secret>/nar/<file> -> {url} -> PUT url (direct to R2) -> PUT /upload/<secret>/<hash>.narinfo
+    if (req.method === "POST" && path.startsWith("/presign/")) {
+      const rest = path.slice("/presign/".length);
+      const slash = rest.indexOf("/");
+      if (slash < 0) return new Response("bad presign path\n", { status: 400 });
+      const secret = rest.slice(0, slash);
+      const key = rest.slice(slash + 1);
+      if (!env.UPLOAD_SECRET || !timingSafeEqual(secret, env.UPLOAD_SECRET)) {
+        return new Response("forbidden\n", { status: 403 });
+      }
+      if (!key || key.includes("..") || !key.startsWith("nar/")) {
+        return new Response("bad key\n", { status: 400 });
+      }
+      if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
+        return new Response("presign not configured\n", { status: 501 });
+      }
+      const client = new AwsClient({
+        service: "s3",
+        region: "auto",
+        accessKeyId: env.R2_ACCESS_KEY_ID,
+        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+      });
+      const r2Url = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/nix-cache-nars/${key}?X-Amz-Expires=3600`;
+      const signed = await client.sign(new Request(r2Url, { method: "PUT" }), {
+        aws: { signQuery: true },
+      });
+      return Response.json({ url: signed.url.toString() });
     }
 
     if (req.method === "GET" || req.method === "HEAD") {

@@ -59,10 +59,11 @@ if [ -f "$KEY_FILE" ]; then
   fi
 fi
 
-# Upload NAR
-echo "Uploading NAR (${FILE_SIZE} bytes, zstd)..."
-curl -s -X PUT --data-binary "@$TMPDIR/nar.zst" \
-  "$CACHE_URL/upload/$SECRET/nar/${FILE_HASH}.nar.zst" | head -1
+# Upload NAR via presigned URL (direct to R2, bypasses 100MB Worker limit)
+echo "Getting presigned URL..."
+PRESIGN_URL=$(curl -s -X POST "$CACHE_URL/presign/$SECRET/nar/${FILE_HASH}.nar.zst" | python3 -c "import sys,json; print(json.load(sys.stdin)['url'])")
+echo "Uploading NAR (${FILE_SIZE} bytes, zstd, direct to R2)..."
+curl -s -X PUT --data-binary "@$TMPDIR/nar.zst" -H "Content-Type: application/octet-stream" "$PRESIGN_URL" | head -1
 
 # Upload narinfo
 echo "Uploading narinfo..."
