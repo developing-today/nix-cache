@@ -1,0 +1,49 @@
+name: blacksmith-bench
+
+# One-off benchmark for the Codespaces/Actions/Blacksmith evaluation
+# (developing-today/code#6580, goal_fbdde57a43cd, 2026-11-06):
+# the SAME fleet-binary build the fleet dispatch surfaces run
+# (`nix build .#fleet` in developing-today/code, inside the
+# fleet-build:full container), but as a single job directly on a
+# Blacksmith runner — no GitHub-hosted setup job in front of it, so
+# the timing isolates Blacksmith's queue + hardware.
+#
+# workflow_dispatch ONLY — no other triggers, per the standing
+# no-auto-CI ruling (code#5663).
+#
+# The nix flags mirror fleet-dispatch-test.yml's NIX_CONFIG: job
+# containers run as root, which has no nix.conf of its own, so the
+# experimental features and the fleet substituters are passed
+# explicitly.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (blacksmith)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/developing-today/fleet-build:full
+      options: --user root
+    steps:
+      - name: Clone developing-today/code (anonymous, public)
+        shell: bash
+        run: git clone --depth 1 https://github.com/developing-today/code.git target
+
+      - name: Build the fleet binary
+        shell: bash
+        run: |
+          cd target
+          time nix --extra-experimental-features "nix-command flakes ca-derivations" \
+            build .#fleet \
+            --option sandbox false \
+            --option eval-cache false \
+            --option build-users-group "" \
+            --extra-substituters "https://nix-cache.developing-today.workers.dev https://developing-today.cachix.org" \
+            --extra-trusted-public-keys "nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8= developing-today.cachix.org-1:dfIGqIJODUw9V/O9yUrYP2d3tjJtk3SZTDxOBWn9vN4="
+          ls -la result/bin/
