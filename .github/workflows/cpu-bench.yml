@@ -51,10 +51,17 @@ jobs:
           # as root, cargo is not on PATH. Locate it and point rustup
           # at the baked toolchain store (first run proved this:
           # 'cargo: command not found', exit 127).
-          for d in /home/vscode/.cargo/bin /root/.cargo/bin /usr/local/cargo/bin; do
+          for d in /home/vscode/.nix-profile/bin /home/vscode/.cargo/bin /root/.cargo/bin /usr/local/cargo/bin /nix/var/nix/profiles/default/bin; do
             if [ -x "$d/cargo" ]; then export PATH="$d:$PATH"; break; fi
           done
           if [ -d /home/vscode/.rustup ]; then export RUSTUP_HOME=/home/vscode/.rustup; fi
+          if ! command -v cargo >/dev/null; then
+            echo "cargo still not on PATH; searching the image:"
+            ls /home/vscode/.nix-profile/bin 2>/dev/null | head -30
+            find /nix/store -maxdepth 4 -name cargo -type f 2>/dev/null | head -5
+            find / -maxdepth 6 -name cargo -type f 2>/dev/null | head -5
+            exit 1
+          fi
           command -v cargo
           export CARGO_HOME="$PWD/.cargo-home"
           export CARGO_TARGET_DIR="$PWD/target-dir"
@@ -92,10 +99,17 @@ jobs:
           # as root, cargo is not on PATH. Locate it and point rustup
           # at the baked toolchain store (first run proved this:
           # 'cargo: command not found', exit 127).
-          for d in /home/vscode/.cargo/bin /root/.cargo/bin /usr/local/cargo/bin; do
+          for d in /home/vscode/.nix-profile/bin /home/vscode/.cargo/bin /root/.cargo/bin /usr/local/cargo/bin /nix/var/nix/profiles/default/bin; do
             if [ -x "$d/cargo" ]; then export PATH="$d:$PATH"; break; fi
           done
           if [ -d /home/vscode/.rustup ]; then export RUSTUP_HOME=/home/vscode/.rustup; fi
+          if ! command -v cargo >/dev/null; then
+            echo "cargo still not on PATH; searching the image:"
+            ls /home/vscode/.nix-profile/bin 2>/dev/null | head -30
+            find /nix/store -maxdepth 4 -name cargo -type f 2>/dev/null | head -5
+            find / -maxdepth 6 -name cargo -type f 2>/dev/null | head -5
+            exit 1
+          fi
           command -v cargo
           export CARGO_HOME="$PWD/.cargo-home"
           export CARGO_TARGET_DIR="$PWD/target-dir"
