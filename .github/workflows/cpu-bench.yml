@@ -47,6 +47,15 @@ jobs:
         shell: bash
         run: |
           cd target/pkgs/fleet
+          # The image bakes the Rust toolchain for its vscode user;
+          # as root, cargo is not on PATH. Locate it and point rustup
+          # at the baked toolchain store (first run proved this:
+          # 'cargo: command not found', exit 127).
+          for d in /home/vscode/.cargo/bin /root/.cargo/bin /usr/local/cargo/bin; do
+            if [ -x "$d/cargo" ]; then export PATH="$d:$PATH"; break; fi
+          done
+          if [ -d /home/vscode/.rustup ]; then export RUSTUP_HOME=/home/vscode/.rustup; fi
+          command -v cargo
           export CARGO_HOME="$PWD/.cargo-home"
           export CARGO_TARGET_DIR="$PWD/target-dir"
           cargo --version
@@ -79,6 +88,15 @@ jobs:
         shell: bash
         run: |
           cd target/pkgs/fleet
+          # The image bakes the Rust toolchain for its vscode user;
+          # as root, cargo is not on PATH. Locate it and point rustup
+          # at the baked toolchain store (first run proved this:
+          # 'cargo: command not found', exit 127).
+          for d in /home/vscode/.cargo/bin /root/.cargo/bin /usr/local/cargo/bin; do
+            if [ -x "$d/cargo" ]; then export PATH="$d:$PATH"; break; fi
+          done
+          if [ -d /home/vscode/.rustup ]; then export RUSTUP_HOME=/home/vscode/.rustup; fi
+          command -v cargo
           export CARGO_HOME="$PWD/.cargo-home"
           export CARGO_TARGET_DIR="$PWD/target-dir"
           cargo --version
