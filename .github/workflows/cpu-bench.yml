@@ -1,0 +1,90 @@
+name: cpu-bench
+
+# One-off CPU-bound benchmark, follow-up to blacksmith-bench.yml
+# (developing-today/code#6580, 2026-11-06). The first benchmark tied
+# (2m25s GitHub-hosted vs 2m29s Blacksmith) because `nix build
+# .#fleet` with substituters enabled is cache/fetch-bound — the
+# silicon never got to work. This one compiles the fleet crate
+# workspace (developing-today/code pkgs/fleet: 10 crates, ~147
+# locked dependencies) with cargo from a CLEAN checkout and a CLEAN
+# CARGO_HOME on both runner kinds: no nix substituters, no cargo
+# registry/target caches. The wall time is rustc-bound.
+#
+# workflow_dispatch ONLY — no other triggers (code#5663).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "developing-today/code commit to build"
+        type: string
+        required: false
+        default: "4e92da9311d9fc4247d68573e7d474c57dbdbfee"
+
+permissions:
+  contents: read
+
+jobs:
+  github:
+    name: build (github)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/developing-today/fleet-build:full
+      options: --user root
+    steps:
+      - name: Clone developing-today/code at the pinned ref
+        shell: bash
+        env:
+          BENCH_REF: ${{ inputs.ref }}
+        run: |
+          git clone --depth 1 https://github.com/developing-today/code.git target
+          cd target
+          git fetch --depth 1 origin "$BENCH_REF"
+          git checkout -q FETCH_HEAD
+          echo "HEAD: $(git rev-parse HEAD)"
+      - name: Compile the fleet crate workspace from clean
+        shell: bash
+        run: |
+          cd target/pkgs/fleet
+          export CARGO_HOME="$PWD/.cargo-home"
+          export CARGO_TARGET_DIR="$PWD/target-dir"
+          cargo --version
+          rustc --version
+          start=$(date +%s)
+          cargo build --release --locked
+          end=$(date +%s)
+          echo "COMPILE_SECONDS=$((end-start))"
+          ls -la target-dir/release/fleet
+
+  blacksmith:
+    name: build (blacksmith)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/developing-today/fleet-build:full
+      options: --user root
+    steps:
+      - name: Clone developing-today/code at the pinned ref
+        shell: bash
+        env:
+          BENCH_REF: ${{ inputs.ref }}
+        run: |
+          git clone --depth 1 https://github.com/developing-today/code.git target
+          cd target
+          git fetch --depth 1 origin "$BENCH_REF"
+          git checkout -q FETCH_HEAD
+          echo "HEAD: $(git rev-parse HEAD)"
+      - name: Compile the fleet crate workspace from clean
+        shell: bash
+        run: |
+          cd target/pkgs/fleet
+          export CARGO_HOME="$PWD/.cargo-home"
+          export CARGO_TARGET_DIR="$PWD/target-dir"
+          cargo --version
+          rustc --version
+          start=$(date +%s)
+          cargo build --release --locked
+          end=$(date +%s)
+          echo "COMPILE_SECONDS=$((end-start))"
+          ls -la target-dir/release/fleet
