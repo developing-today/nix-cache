@@ -50,8 +50,24 @@ wrangler queues create nix-cache-indexing
 # put the returned KV id / D1 database_id into wrangler.toml
 wrangler d1 execute nix-cache-db --remote --file schema.sql
 openssl rand -hex 16 | wrangler secret put UPLOAD_SECRET
-wrangler deploy
 ```
+
+## Deployment workflow
+
+Production Worker changes use `.github/workflows/deploy.yml` on `main`. Add
+`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as GitHub repository secrets
+for the account that owns the existing cache resources. The workflow is manual:
+
+1. Choose **upload** to build and upload an inactive Workers version. Copy its
+   exact version UUID from the run summary.
+2. Choose **activate** and provide that UUID to activate the reviewed version
+   at 100%. The workflow applies the configured public `workers.dev` route,
+   Queue consumer, and Cron trigger, then verifies the active version.
+
+The workflow pins Node.js, GitHub Actions, and the `cf` CLI through the lockfile.
+Its upload path does not activate a version; only the explicit activate action
+changes the serving deployment. The D1 schema and resource setup remain the
+separate setup steps above.
 
 ## Client config (nix.conf)
 
