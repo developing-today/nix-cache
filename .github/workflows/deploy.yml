@@ -4,19 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Upload an inactive version, or activate an exact uploaded version
+        description: Upload an inactive version, or promote a version from a successful upload run
         type: choice
         required: true
         options:
           - upload
           - activate
-      version_id:
-        description: Exact Cloudflare version UUID (required for activate)
+      upload_run_id:
+        description: Successful upload workflow run ID (required for activate)
         type: string
         required: false
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: nix-cache-production-deploy
@@ -26,9 +27,25 @@ jobs:
   deploy:
     if: github.repository == 'developing-today/nix-cache' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    environment: nix-cache-production
     timeout-minutes: 20
     steps:
-      - name: Check out the selected main commit
+      - name: Validate workflow request
+        env:
+          ACTION_KIND: ${{ inputs.action }}
+          UPLOAD_RUN_ID: ${{ inputs.upload_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]]
+          if [[ "$ACTION_KIND" == upload ]]; then
+            [[ -z "$UPLOAD_RUN_ID" ]]
+          elif [[ "$ACTION_KIND" == activate ]]; then
+            [[ "$UPLOAD_RUN_ID" =~ ^[0-9]+$ ]]
+          else
+            exit 2
+          fi
+
+      - name: Check out selected main commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -43,41 +60,34 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Validate request and build output
-        env:
-          ACTION_KIND: ${{ inputs.action }}
-          VERSION_ID: ${{ inputs.version_id }}
+      - name: Build and dry-run version upload
         run: |
           set -euo pipefail
-          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]]
-          if [[ "$ACTION_KIND" == upload ]]; then
-            [[ -z "$VERSION_ID" ]]
-          elif [[ "$ACTION_KIND" == activate ]]; then
-            [[ "$VERSION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
-          else
-            exit 2
-          fi
           npx --no-install cf build --mode production
           npx --no-install cf workers versions create --prebuilt --mode production --worker nix-cache --dry-run
-          if [[ "$ACTION_KIND" == activate ]]; then
-            npx --no-install cf workers triggers deploy --prebuilt --mode production --worker nix-cache --dry-run
-          fi
 
-      - name: Upload inactive version
+      - name: Capture current production state before upload
         if: inputs.action == 'upload'
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/cf_deploy.py snapshot --output "$RUNNER_TEMP/base.json"
+
+      - name: Upload inactive Worker version
+        if: inputs.action == 'upload'
+        id: upload
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
-          [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ && -n "$CLOUDFLARE_API_TOKEN" ]]
           sha="$GITHUB_SHA"
-          tag="git-${sha:0:12}"
+          tag="upload-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${sha:0:12}"
           npx --no-install cf workers versions create \
             --prebuilt --mode production --worker nix-cache \
             --tag "$tag" --message "nix-cache candidate $sha"
           npx --no-install cf -q workers versions list --worker-id nix-cache > "$RUNNER_TEMP/versions.json"
-          python3 - "$RUNNER_TEMP/versions.json" "$tag" "$GITHUB_STEP_SUMMARY" <<'PY'
+          version="$(python3 - "$RUNNER_TEMP/versions.json" "$tag" <<'PY'
           import json, sys
           data = json.load(open(sys.argv[1], encoding="utf-8"))
           versions = data if isinstance(data, list) else data.get("result", data.get("versions", []))
@@ -90,93 +100,152 @@ jobs:
           version_id = matches[0].get("id")
           if not isinstance(version_id, str):
               raise SystemExit("Tagged version has no ID")
-          with open(sys.argv[3], "a", encoding="utf-8") as summary:
-              summary.write(f"Uploaded inactive candidate version `{version_id}` for `{sys.argv[2]}`.\n")
           print(version_id)
           PY
-
-          version="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));vs=d if isinstance(d,list) else d.get("result",d.get("versions",[]));vs=vs.get("items",[]) if isinstance(vs,dict) else vs;tag=sys.argv[2];m=[v for v in vs if v.get("annotations",{}).get("workers/tag")==tag];m.sort(key=lambda v:v.get("metadata",{}).get("created_on",""),reverse=True);print(m[0]["id"])' "$RUNNER_TEMP/versions.json" "$tag")"
-          curl --fail --silent --show-error --max-time 15 \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/nix-cache/versions?deployable=true" \
-            > "$RUNNER_TEMP/deployable.json"
-          python3 - "$RUNNER_TEMP/deployable.json" "$version" <<'PY'
-          import json, sys
-          data = json.load(open(sys.argv[1], encoding="utf-8"))
-          versions = data.get("result", [])
-          if isinstance(versions, dict):
-              versions = versions.get("items", [])
-          if not data.get("success") or sys.argv[2] not in [v.get("id") for v in versions]:
-              raise SystemExit("Uploaded version is not in Cloudflare's deployable version set")
+          )"
+          python3 scripts/cf_deploy.py verify-version --version-id "$version"
+          python3 - "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/receipt.json" "$version" <<'PY'
+          import json, os, re, sys
+          base = json.load(open(sys.argv[1], encoding="utf-8"))
+          version = sys.argv[3]
+          if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", version):
+              raise SystemExit("Cloudflare returned an invalid candidate version UUID")
+          receipt = {
+              "schema": 1,
+              "action": "upload",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow": ".github/workflows/deploy.yml",
+              "ref": os.environ["GITHUB_REF"],
+              "sha": os.environ["GITHUB_SHA"],
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "worker": "nix-cache",
+              "account_id": os.environ["CLOUDFLARE_ACCOUNT_ID"],
+              "version_id": version.lower(),
+              "baseline": base,
+          }
+          with open(sys.argv[2], "w", encoding="utf-8") as stream:
+              json.dump(receipt, stream, indent=2, sort_keys=True)
+              stream.write("\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"Uploaded inactive candidate `{version}`. Use run ID `{os.environ['GITHUB_RUN_ID']}` to request its promotion.\n")
           PY
-          echo "Candidate version: $version" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Verify exact version is deployable
+      - name: Store exact upload receipt
+        if: inputs.action == 'upload'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nix-cache-upload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Read and verify upload run metadata
         if: inputs.action == 'activate'
+        id: upload_run
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          VERSION_ID: ${{ inputs.version_id }}
+          GH_TOKEN: ${{ github.token }}
+          UPLOAD_RUN_ID: ${{ inputs.upload_run_id }}
         run: |
           set -euo pipefail
-          [[ "$CLOUDFLARE_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ && -n "$CLOUDFLARE_API_TOKEN" ]]
-          curl --fail --silent --show-error --max-time 15 \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/nix-cache/versions?deployable=true" \
-            > "$RUNNER_TEMP/deployable.json"
-          python3 - "$RUNNER_TEMP/deployable.json" "$VERSION_ID" <<'PY'
-          import json, sys
-          data = json.load(open(sys.argv[1], encoding="utf-8"))
-          versions = data.get("result", [])
-          if isinstance(versions, dict):
-              versions = versions.get("items", [])
-          if not data.get("success") or sys.argv[2] not in [v.get("id") for v in versions]:
-              raise SystemExit("Exact requested version is not deployable for nix-cache")
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$UPLOAD_RUN_ID" > "$RUNNER_TEMP/upload-run.json"
+          python3 - "$RUNNER_TEMP/upload-run.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, os, sys
+          run = json.load(open(sys.argv[1], encoding="utf-8"))
+          repository = run.get("repository", {}).get("full_name")
+          path = run.get("path", "")
+          if (repository != "developing-today/nix-cache"
+              or path.split("@", 1)[0] != ".github/workflows/deploy.yml"
+              or run.get("event") != "workflow_dispatch"
+              or run.get("head_branch") != "main"
+              or run.get("status") != "completed"
+              or run.get("conclusion") != "success"
+              or run.get("head_repository", {}).get("full_name") != repository):
+              raise SystemExit("Selected run is not a successful nix-cache upload workflow on main")
+          with open(sys.argv[2], "a", encoding="utf-8") as output:
+              output.write(f"attempt={int(run['run_attempt'])}\n")
+              output.write(f"sha={run['head_sha']}\n")
           PY
 
-      - name: Activate the exact version at 100 percent
+      - name: Download receipt from the exact upload run
+        if: inputs.action == 'activate'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: nix-cache-upload-${{ inputs.upload_run_id }}-${{ steps.upload_run.outputs.attempt }}
+          path: ${{ runner.temp }}/upload-receipt
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.upload_run_id }}
+
+      - name: Validate exact upload receipt
+        if: inputs.action == 'activate'
+        id: receipt
+        env:
+          UPLOAD_RUN_ID: ${{ inputs.upload_run_id }}
+          UPLOAD_RUN_ATTEMPT: ${{ steps.upload_run.outputs.attempt }}
+          UPLOAD_RUN_SHA: ${{ steps.upload_run.outputs.sha }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/upload-receipt/receipt.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, os, re, sys
+          receipt = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected = {
+              "schema": 1,
+              "action": "upload",
+              "repository": "developing-today/nix-cache",
+              "workflow": ".github/workflows/deploy.yml",
+              "ref": "refs/heads/main",
+              "sha": os.environ["UPLOAD_RUN_SHA"],
+              "run_id": int(os.environ["UPLOAD_RUN_ID"]),
+              "run_attempt": int(os.environ["UPLOAD_RUN_ATTEMPT"]),
+              "worker": "nix-cache",
+              "account_id": os.environ["CLOUDFLARE_ACCOUNT_ID"],
+          }
+          for key, value in expected.items():
+              if receipt.get(key) != value:
+                  raise SystemExit(f"Upload receipt {key} does not match the trusted workflow run")
+          version = receipt.get("version_id", "")
+          baseline = receipt.get("baseline", {})
+          if (not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", version)
+              or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", baseline.get("deployment_id", ""))
+              or not isinstance(baseline.get("versions"), list)
+              or not baseline["versions"]):
+              raise SystemExit("Upload receipt has no valid candidate or production baseline")
+          with open(sys.argv[2], "a", encoding="utf-8") as output:
+              output.write(f"version_id={version}\n")
+          with open(os.environ["RUNNER_TEMP"] + "/baseline.json", "w", encoding="utf-8") as stream:
+              json.dump(baseline, stream, indent=2, sort_keys=True)
+          PY
+
+      - name: Recheck configuration parity and production baseline
         if: inputs.action == 'activate'
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          VERSION_ID: ${{ inputs.version_id }}
+          VERSION_ID: ${{ steps.receipt.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/cf_deploy.py verify-baseline --baseline "$RUNNER_TEMP/baseline.json" --version-id "$VERSION_ID"
+
+      - name: Activate the receipted version at 100 percent
+        if: inputs.action == 'activate'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VERSION_ID: ${{ steps.receipt.outputs.version_id }}
         run: |
           set -euo pipefail
           npx --no-install cf workers deployments create \
             --worker nix-cache --strategy percentage \
             --versions "[{\"version_id\":\"$VERSION_ID\",\"percentage\":100}]"
 
-      - name: Apply the configured public route, Queue consumer, and Cron trigger
+      - name: Verify serving deployment and settings read-back
         if: inputs.action == 'activate'
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VERSION_ID: ${{ steps.receipt.outputs.version_id }}
         run: |
           set -euo pipefail
-          npx --no-install cf workers triggers deploy \
-            --prebuilt --mode production --worker nix-cache
-
-      - name: Verify active version read-back
-        if: inputs.action == 'activate'
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          VERSION_ID: ${{ inputs.version_id }}
-        run: |
-          set -euo pipefail
-          npx --no-install cf -q workers deployments list --worker nix-cache > "$RUNNER_TEMP/deployments.json"
-          python3 - "$RUNNER_TEMP/deployments.json" "$VERSION_ID" "$GITHUB_STEP_SUMMARY" <<'PY'
-          import json, sys
-          data = json.load(open(sys.argv[1], encoding="utf-8"))
-          rows = data if isinstance(data, list) else data.get("result", data.get("deployments", []))
-          if isinstance(rows, dict):
-              rows = rows.get("items", [])
-          found = [row for row in rows if any(
-              version.get("version_id") == sys.argv[2] and int(version.get("percentage", 0)) == 100
-              for version in row.get("versions", [])
-          )]
-          if not found:
-              raise SystemExit("Deployment read-back did not confirm the exact version at 100 percent")
-          with open(sys.argv[3], "a", encoding="utf-8") as summary:
-              summary.write(f"Activated `{sys.argv[2]}` and verified deployment read-back at 100%.\n")
-          PY
+          python3 scripts/cf_deploy.py verify-active --version-id "$VERSION_ID"
+          echo "Activated and verified version `$VERSION_ID` at 100%." >> "$GITHUB_STEP_SUMMARY"
