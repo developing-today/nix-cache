@@ -96,7 +96,7 @@ jobs:
           matches = [v for v in versions if v.get("annotations", {}).get("workers/tag") == sys.argv[2]]
           if not matches:
               raise SystemExit("Cloudflare did not list the version with the exact commit tag")
-          matches.sort(key=lambda v: v.get("metadata", {}).get("created_on", ""), reverse=True)
+          matches.sort(key=lambda v: (v.get("metadata") or {}).get("created_on") or v.get("created_on", ""), reverse=True)
           version_id = matches[0].get("id")
           if not isinstance(version_id, str):
               raise SystemExit("Tagged version has no ID")

@@ -47,7 +47,9 @@ wrangler r2 bucket create nix-cache-nars
 wrangler kv namespace create INDEX
 wrangler d1 create nix-cache-db
 wrangler queues create nix-cache-indexing
-# put the returned KV id / D1 database_id into wrangler.toml
+# put the returned KV id / D1 database_id into BOTH cloudflare.config.ts
+# (what `cf build` deploys) and wrangler.toml (what scripts/cf_deploy.py checks
+# and what the schema command uses); keep the two in sync
 wrangler d1 execute nix-cache-db --remote --file schema.sql
 openssl rand -hex 16 | wrangler secret put UPLOAD_SECRET
 ```
