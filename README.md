@@ -47,11 +47,43 @@ wrangler r2 bucket create nix-cache-nars
 wrangler kv namespace create INDEX
 wrangler d1 create nix-cache-db
 wrangler queues create nix-cache-indexing
-# put the returned KV id / D1 database_id into wrangler.toml
+# put the returned KV id / D1 database_id into BOTH cloudflare.config.ts
+# (what `cf build` deploys) and wrangler.toml (what scripts/cf_deploy.py checks
+# and what the schema command uses); keep the two in sync
 wrangler d1 execute nix-cache-db --remote --file schema.sql
 openssl rand -hex 16 | wrangler secret put UPLOAD_SECRET
-wrangler deploy
 ```
+
+## Deployment workflow
+
+Production Worker changes use `.github/workflows/deploy.yml` on `main`. Configure
+a protected GitHub environment named `nix-cache-production`, restrict it to the
+`main` branch, and require an approver for deployments. Add the account ID as the
+environment variable `CLOUDFLARE_ACCOUNT_ID` and a dedicated Cloudflare API
+token as the environment secret `CLOUDFLARE_API_TOKEN`; do not store either as a
+repository-level secret. Scope the token to the account that owns this cache and
+grant only Workers Scripts Read, Workers Scripts Write, and Queues Read. The
+workflow uses the token only in Cloudflare API/CLI steps. Never use a global API
+key or a token shared with other workflows.
+
+The workflow is manual:
+
+1. Choose **upload** to build and upload an inactive Workers version. The run
+   checks the current `workers.dev` route, Cron trigger, Queue consumer, active
+   version bindings, and runtime compatibility settings against this repository.
+   Any mismatch stops the run. It stores a receipt artifact tied to that exact
+   successful upload run and records the currently serving deployment.
+2. After review, choose **activate** and provide the upload workflow run ID.
+   The workflow verifies that run and its receipt, repeats the read-only
+   configuration checks, and stops if the serving deployment changed since the
+   upload. It then creates a Workers Version deployment for the receipted
+   version at 100% and verifies read-back.
+
+The workflow pins Node.js, GitHub Actions, and the `cf` CLI through the lockfile.
+It never applies routes, Queue consumers, or Cron triggers; these settings remain
+under the existing configuration and are verified without writes before
+promotion. The D1 schema and resource setup remain the separate setup steps
+above.
 
 ## Client config (nix.conf)
 
